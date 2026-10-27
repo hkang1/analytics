@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#
+# Regenerate one static GoAccess report per site, then exit.
+#
+# --db-path is a DIRECTORY (goaccess.conf: "Path where the persisted database
+# files are stored on disk"). GoAccess creates its ~150 state files INSIDE it
+# with generic names, NOT namespaced per site -- so each site needs its OWN
+# subdirectory or the second run overwrites the first's history.
+#
+# --persist/--restore accumulates across runs so reports cover all logged days.
+#
+# NOT --real-time-html: that starts a websocket server and holds the process
+# open, which this 1-vCPU box does not need.
+#
+# stderr is not suppressed and a missing/empty report is a non-zero exit. An
+# earlier version hid its own failure and exited 0 with an empty directory.
+set -euo pipefail
+
+LOG_DIR=/var/log/nginx
+OUT=/var/www/traffic
+STATE=/var/lib/swanpan-traffic
+ORIGIN_IP=174.138.42.13
+
+# Must match log_format 'swanpan': visitor IP, timestamp, request, status,
+# bytes, referer, user agent, $request_time, $cf_ipcountry.
+FORMAT='%h %^[%d:%t %^] "%r" %s %b "%R" "%u" %T %^'
+
+# render <name> <logfile> <self-referrer> [extra referrer to hide]
+render() {
+  local name=$1 log=$2 self=$3 extra=${4:-}
+
+  if [[ ! -r $log ]]; then
+    echo "skip $name: $log not readable" >&2
+    return 0
+  fi
+
+  local args=(
+    --log-format="$FORMAT"
+    --date-format='%d/%b/%Y'
+    --time-format='%H:%M:%S'
+    --persist --restore --db-path="$STATE/$name"
+    --ignore-crawlers
+    --exclude-ip=127.0.0.1
+    # The droplet's own public IP: requests logged with it reached the origin
+    # directly, bypassing Cloudflare. Almost always our own testing.
+    --exclude-ip="$ORIGIN_IP"
+  )
+
+  # hide-referrer, not ignore-referrer: these visits are real people on the
+  # site, they are simply not acquisition sources. Dropping them from the
+  # referring-sites panel keeps the traffic totals honest.
+  [[ -n $self  ]] && args+=(--hide-referrer="$self")
+  [[ -n $extra ]] && args+=(--hide-referrer="$extra")
+
+  install -d "$STATE/$name"
+  goaccess "$log" "${args[@]}" \
+    --html-report-title="$name -- traffic" \
+    -o "$OUT/$name.html"
+
+  if [[ ! -s "$OUT/$name.html" ]]; then
+    echo "ERROR: $name report not written" >&2
+    return 1
+  fi
+  echo "wrote $OUT/$name.html ($(wc -c < "$OUT/$name.html") bytes)"
+}
+
+# swanpan: hide self-referrals only. No alias domain.
+render swanpan "${LOG_DIR}/swanpan-prod.access.log" 'swanpan.io' ''
+
+# hoyoul: serves four hostnames, so hide both the primary and the alias.
+render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" 'hoyoul.com' 'calebkang.com'
+
+# Staging excluded on purpose: noindex, and its traffic is our own testing.
+
+chown -R www-data:www-data "$OUT"

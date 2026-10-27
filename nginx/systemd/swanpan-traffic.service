@@ -1,0 +1,7 @@
+[Unit]
+Description=Regenerate GoAccess traffic reports
+After=nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/swanpan-traffic
