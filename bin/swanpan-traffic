@@ -27,7 +27,9 @@ FORMAT='%h %^[%d:%t %^] "%r" %s %b "%R" "%u" %T %^'
 
 # render <name> <logfile> <self-referrer> [extra referrer to hide]
 render() {
-  local name=$1 log=$2 self=$3 extra=${4:-}
+  local name=$1 log=$2
+  shift 2
+  local hides=("$@")
 
   if [[ ! -r $log ]]; then
     echo "skip $name: $log not readable" >&2
@@ -49,8 +51,10 @@ render() {
   # hide-referrer, not ignore-referrer: these visits are real people on the
   # site, they are simply not acquisition sources. Dropping them from the
   # referring-sites panel keeps the traffic totals honest.
-  [[ -n $self  ]] && args+=(--hide-referrer="$self")
-  [[ -n $extra ]] && args+=(--hide-referrer="$extra")
+  local needle
+  for needle in "${hides[@]}"; do
+    [[ -n $needle ]] && args+=(--hide-referrer="$needle")
+  done
 
   install -d "$STATE/$name"
   goaccess "$log" "${args[@]}" \
@@ -65,10 +69,15 @@ render() {
 }
 
 # swanpan: hide self-referrals only. No alias domain.
-render swanpan "${LOG_DIR}/swanpan-prod.access.log" 'swanpan.io' ''
+render swanpan "${LOG_DIR}/swanpan-prod.access.log" \
+  'swanpan.io' 'www.swanpan.io' '174.138.42.13' '174.138.42.13:443'
 
-# hoyoul: serves four hostnames, so hide both the primary and the alias.
-render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" 'hoyoul.com' 'calebkang.com'
+# hoyoul serves four hostnames across two domains. Every one of them must be
+# listed: the panel keys on the host, so hiding "hoyoul.com" leaves
+# "www.hoyoul.com" visible. Plain needles -- see the note about wildcards above.
+render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" \
+  'hoyoul.com' 'www.hoyoul.com' 'calebkang.com' 'www.calebkang.com' \
+  '174.138.42.13' '174.138.42.13:443'
 
 # Staging excluded on purpose: noindex, and its traffic is our own testing.
 

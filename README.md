@@ -90,6 +90,28 @@ Every one of these cost real time. They are not hypothetical.
    200 whether or not the firewall works. The same goes for `real_ip`: a
    `127.0.0.1` request proves nothing, you must load the site through Cloudflare.
 
+9. **`--hide-referrer` matches the panel value exactly, not a substring.** See
+   the Referrer filtering section. A needle that looks obviously right
+   (`174.138.42.13`) can hide a 1-hit row and leave a 273-hit row standing,
+   because the panel stored the second one with a port.
+
+10. **Use `-o out.json` to inspect reports, not the HTML.** GoAccess's HTML is
+    a JavaScript payload: panel metadata and row data live in separate
+    structures, `"referring_sites": {…}` describes the columns while the rows
+    sit in a later `"data": […]` array, and grepping for a hostname finds
+    matches in whichever panel happens to be nearby. Three separate attempts to
+    parse that HTML by hand gave three different wrong answers. The JSON output
+    has real panels and real arrays:
+
+    ```sh
+    goaccess <log> --log-format="$FORMAT" --no-global-config -o /tmp/x.json
+    python3 -c 'import json;print(json.load(open("/tmp/x.json"))["referring_sites"]["data"])'
+    ```
+
+11. **A green timer and a rewritten report do not mean the filters applied.**
+    Both were true while self-referrals were still visible. Check the content of
+    the panel you changed, in the format the tool stores it.
+
 ## Referrer filtering
 
 Two flags that are easy to mix up:
@@ -100,9 +122,70 @@ Two flags that are easy to mix up:
 - `--ignore-referrer=<needle>` drops the hit entirely. Use for spam referrers
   that inflate totals.
 
-Currently hidden: `swanpan.io` for its own report; `hoyoul.com` and
-`calebkang.com` for theirs. `174.138.42.13` is excluded as a client IP because
-it is the droplet itself.
+### The needle must equal the panel value EXACTLY
+
+This is trap 9 and it cost hours. `--hide-referrer` does **not** substring-match.
+It compares against the value GoAccess stores in the referring-sites row, and
+that value is the **host, with the port if one was present** — not the URL.
+
+Measured on one log, counting the rows left afterwards:
+
+| needle | drops | leaves behind |
+|---|---|---|
+| `174.138.42.13` | `174.138.42.13` (1 hit) | **`174.138.42.13:443` (273 hits)** |
+| `174.138.42.13:443` | `174.138.42.13:443` | `174.138.42.13` |
+| `*174.138.42.13*` | nothing | everything |
+| `http://www.hoyoul.com` | nothing | everything |
+| `www.hoyoul.com` | `www.hoyoul.com` | — |
+
+So the needle list has to spell out every literal form the panel can hold.
+`hoyoul.com` and `www.hoyoul.com` are two rows, and hiding one leaves the other.
+The same referrer seen with and without a port is two rows.
+
+Wildcards do not help — a `*needle*` pattern matched nothing. Scheme-prefixed
+needles (`http://…`) also match nothing, because the panel never stores the
+scheme.
+
+### Changing the needle list needs a state reseed
+
+`--hide-referrer` filters at **ingest**. `--persist`/`--restore` replays rows
+that are already in the database, and those rows were ingested under whatever
+flags existed at the time. A row that got in before the needle did stays in
+every subsequent report forever.
+
+Symptom: you edit the flags, the timer goes green, the report is rewritten
+(bytes change), and the offending row is still there. Nothing is broken — the
+row is being restored, not re-parsed.
+
+Reseed after any filter change:
+
+```sh
+systemctl stop swanpan-traffic.timer
+mv /var/lib/swanpan-traffic /var/lib/swanpan-traffic.bak-$(date +%s)
+install -d -o www-data -g www-data /var/lib/swanpan-traffic
+systemctl start swanpan-traffic.timer
+```
+
+Use `mv`, not `rm`, and **do not run the job by hand immediately afterwards**.
+Let the timer produce the report, and make any verification wait for a report
+whose mtime is newer than the reseed — checking "is the file recent?" against
+the clock happily passes on the run you just did manually, which is how a stale
+report gets mistaken for a fixed one.
+
+Cost of a reseed is small: the job reads only the current `*.access.log`, not the
+rotated `.1`/`.2.gz` files, so history beyond the current file was never in the
+report to begin with.
+
+Currently hidden:
+
+- swanpan: `swanpan.io`, `www.swanpan.io`, `174.138.42.13`, `174.138.42.13:443`
+- hoyoul: `hoyoul.com`, `www.hoyoul.com`, `calebkang.com`, `www.calebkang.com`,
+  `174.138.42.13`, `174.138.42.13:443`
+
+The droplet's own IP appears as a **referrer** (not just a client), because hits
+to `https://174.138.42.13/` produce redirects that carry it as the source.
+`--exclude-ip` cannot touch that — it filters the client column. It needs a
+`--hide-referrer` needle like any other referrer.
 
 ## Origin lock
 
