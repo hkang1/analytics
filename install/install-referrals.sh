@@ -87,13 +87,29 @@ Type=oneshot
 ExecStart=/usr/local/bin/swanpan-referrals
 EOF
 
+# Once a day, at 04:17 UTC -- deliberately NOT on the hour, and deliberately
+# well away from log rotation.
+#
+# nginx logs rotate DAILY at ~23:55 (see /etc/logrotate.d/nginx, 'daily' +
+# postrotate 'nginx rotate'). Whatever remains in *.log at that moment is
+# renamed to *.log.1 and starts over. This job is fed ONLY the live *.log, so
+# a run must happen INSIDE each rotation window or the day's tail is skipped.
+#
+# 23:55 -> 04:17 leaves a ~20h window, so a run always sees everything logged
+# since the last rotation plus ~4h of the previous day's tail: no gap, and the
+# overlap is harmless because --persist de-duplicates by the visit key.
+#
+# Refusing 'OnCalendar=*-*-* 00:00' here: midnight UT is within minutes of
+# rotation, so any clock skew or a slow logrotate would silently skip a day.
 cat > /etc/systemd/system/swanpan-referrals.timer <<'EOF'
 [Unit]
-Description=Rebuild referral-URL reports every 30 minutes
+Description=Rebuild referral-URL reports daily at 04:17 UTC
 
 [Timer]
-OnBootSec=6min
-OnUnitActiveSec=30min
+OnCalendar=*-*-* 04:17:00 UTC
+# Fire late-but-not-lost if the box was down at 04:17.
+Persistent=true
+RandomizedDelaySec=120
 AccuracySec=60s
 
 [Install]
@@ -101,7 +117,10 @@ WantedBy=timers.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now swanpan-referrals.timer
+# Re-load the new timer definition and restart it, so an earlier install's
+# 'every 30 minutes' schedule is replaced rather than both running.
+systemctl enable swanpan-referrals.timer
+systemctl restart swanpan-referrals.timer
 echo
 echo "timer:"
 systemctl list-timers swanpan-referrals.timer --no-pager

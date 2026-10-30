@@ -32,7 +32,7 @@ GoAccess keeps and for country data pulled from nginx's own logs.
 | `/usr/local/bin/swanpan-referrals` | referral-URL report job (from `bin/`) |
 | `/usr/local/bin/swanpan-referrals-render` | its JSON → HTML renderer |
 | `/usr/local/bin/swanpan-index` | rebuilds `/var/www/traffic/index.html` |
-| `/etc/systemd/system/swanpan-referrals.{service,timer}` | oneshot, every 30 min |
+| `/etc/systemd/system/swanpan-referrals.{service,timer}` | oneshot, daily 04:17 UTC |
 | `/var/lib/swanpan-traffic-referrals/` | **separate** persistence for the above |
 | `/etc/nginx/sites-available/analytics.limeyeti.com` | vhost |
 | `/etc/nginx/conf.d/{cloudflare-realip,swanpan-logformat,swanpan-cfcountry}.conf` | real IP + log format |
@@ -158,6 +158,21 @@ The report keeps four buckets rather than one flat list:
 
 That last bucket matters more than it looks. A share near zero on a site with
 real traffic means most hits are logged-in navigation, not new arrivals.
+
+### Schedule: daily at 04:17 UTC, and why not midnight
+
+nginx logs rotate **daily at ~23:55** (`/etc/logrotate.d/nginx`: `daily` +
+`postrotate nginx rotate`). The live `*.log` is renamed to `*.log.1` and starts
+over. This job reads only the live `*.log`, so a run must land inside a
+rotation window or that day's tail is never seen.
+
+04:17 sits ~4h after rotation: every run sees all of the current file plus the
+tail of the previous day. The overlap is harmless — `--persist` de-duplicates
+by visit key.
+
+Midnight UT is deliberately avoided. It is minutes from rotation, so clock skew
+or a slow logrotate would skip a whole day silently. `Persistent=true` re-fires
+a missed run after downtime.
 
 ### Separate state dir, on purpose
 
