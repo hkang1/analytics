@@ -1,0 +1,58 @@
+# Referral spam blocklist -- one pattern per line.
+#
+# Matched against the BARE HOST of a referral URL, case-insensitively.
+#   *  matches any run of characters (including dots)
+#   ?  matches exactly one character
+#
+# A line starting with '#' is a comment. Blank lines ignored.
+#
+# Blocked referers are NOT silently dropped: they are counted, listed under
+# "Blocked referral spam" in the report, and excluded from the external totals.
+# Hiding spam without showing the count is how you stop noticing when it grows.
+#
+# Only add domains that are unambiguously spam. A false positive here removes a
+# real acquisition source from the report and nothing will tell you.
+
+# --- redirect/link-hijack networks -------------------------------------------------
+# five.co.in/redirect.php?ref_host=<spam-domain> -- observed in hoyoul logs
+five.co.in
+
+# NO bare-TLD wildcards. '*.work', '*.party', '*.click' etc. would match a
+# legitimate business on that TLD and remove a real acquisition source with
+# nothing to tell you it happened. Add the SPECIFIC spam host instead.
+# Verified: *.party matches both 'quero.party' and a hypothetical real
+# 'birthday.party' -- indistinguishable from the host alone.
+
+# --- known SEO / referral-spam hosts ----------------------------------------------
+*.polva.shop
+*.semalt.com
+*.semalt.semalt.com
+buttons-for-website.com
+buttons-for-your-website.com
+social-buttons.com
+free-share-buttons.com
+darodar.com
+ilovevitaly.com
+ilovevitaly.ru
+econom.co
+priceg.com
+blackhatworld.com
+7makemoneyonline.com
+hulfingtonpost.com
+baixar-musicas-gratis.com
+kambasoft.com
+savetubevideo.com
+success-seo.com
+4webmasters.org
+best-seo-offer.com
+best-seo-solution.com
+get-free-traffic-now.com
+guardlink.org
+trafficmonetize.org
+event-tracking.com
+site14.simplewebtools.com
+
+# --- fake search engines (traffic from 'search' that never happened) --------------
+*.monetizationking.com
+*.monetizeking.com
+*.traffic2bitcoin.com

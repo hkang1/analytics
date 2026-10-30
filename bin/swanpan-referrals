@@ -37,6 +37,7 @@ LOG_DIR=/var/log/nginx
 OUT=/var/www/traffic
 STATE=/var/lib/swanpan-traffic-referrals
 ORIGIN_IP=174.138.42.13
+SPAM_FILE=/etc/swanpan-referral-spam.txt
 
 # Must match log_format 'swanpan'. %R is the referer, %u the user agent.
 FORMAT='%h %^[%d:%t %^] "%r" %s %b "%R" "%u" %T %^'
@@ -80,7 +81,7 @@ render() {
   fi
 
   python3 /usr/local/bin/swanpan-referrals-render "$json" \
-    "$OUT/referrals-$name.html" "$name" "$self_hosts"
+    "$OUT/referrals-$name.html" "$name" "$self_hosts" "$SPAM_FILE"
 
   if [[ ! -s "$OUT/referrals-$name.html" ]]; then
     echo "ERROR: referrals-$name.html not written" >&2

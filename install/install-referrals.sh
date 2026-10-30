@@ -16,6 +16,8 @@ BIN=/usr/local/bin
 OUT=/var/www/traffic
 STATE=/var/lib/swanpan-traffic-referrals
 
+SPAM_DST=/etc/swanpan-referral-spam.txt
+
 for f in swanpan-referrals swanpan-referrals-render; do
   if [[ ! -s $SRC/$f ]]; then
     echo "ERROR: $SRC/$f missing -- copy the files up first" >&2
@@ -27,6 +29,18 @@ install -m 0755 -o root -g root "$SRC/swanpan-referrals"        "$BIN/swanpan-re
 install -m 0755 -o root -g root "$SRC/swanpan-referrals-render" "$BIN/swanpan-referrals-render"
 echo "installed:"
 ls -la "$BIN/swanpan-referrals" "$BIN/swanpan-referrals-render"
+
+# Blocklist. Only installed if absent, so local edits survive a re-install.
+if [[ -s $SRC/../etc/referral-spam.txt ]]; then
+  if [[ -f $SPAM_DST ]]; then
+    echo "kept existing $SPAM_DST"
+  else
+    install -m 0644 -o root -g root "$SRC/../etc/referral-spam.txt" "$SPAM_DST"
+    echo "installed $SPAM_DST"
+  fi
+elif [[ -f /tmp/referral-tools/referral-spam.txt ]]; then
+  [[ -f $SPAM_DST ]] || install -m 0644 -o root -g root /tmp/referral-tools/referral-spam.txt "$SPAM_DST"
+fi
 
 install -d -m 0750 -o root -g root "$STATE"
 # Per-site db dirs. goaccess does not create these and fails hard without them

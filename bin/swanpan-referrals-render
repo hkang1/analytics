@@ -15,11 +15,14 @@ It contains referral URLs, which can carry query strings, so it is treated as
 private: noindex, no-store are set by the vhost for the whole directory.
 """
 
+import fnmatch
 import html
 import json
 import sys
 from collections import Counter
 from urllib.parse import urlsplit
+
+DEFAULT_SPAM_FILE = "/etc/swanpan-referral-spam.txt"
 
 
 def load_panel(doc):
@@ -66,7 +69,34 @@ def host_of(url):
         return ""
 
 
-def classify(value, self_hosts):
+def load_spam_patterns(path):
+    """Read the blocklist. Missing file is NOT an error -- it just means no
+    spam filtering, which must not stop the report from rendering.
+
+    Patterns are shell-glob style (fnmatch): '*' crosses dots on purpose, so
+    '*.party' matches both 'foo.party' and 'a.b.party'.
+    """
+    patterns = []
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                patterns.append(line.lower())
+    except FileNotFoundError:
+        pass
+    return patterns
+
+
+def is_spam(host, patterns):
+    if not host:
+        return False
+    h = host.lower()
+    return any(fnmatch.fnmatchcase(h, p) for p in patterns)
+
+
+def classify(value, self_hosts, spam_patterns=()):
     host = host_of(value)
     if not value or value.strip() == "-":
         return "none", ""
@@ -74,6 +104,8 @@ def classify(value, self_hosts):
         return "junk", ""
     if host in self_hosts:
         return "self", host
+    if is_spam(host, spam_patterns):
+        return "spam", host
     return "external", host
 
 
@@ -129,6 +161,7 @@ native apps, and privacy settings all land here. A high share is normal for a
 site people return to; a share near zero on a site with real traffic usually
 means most hits are logged-in navigation.</p>
 {unparseable}
+{spam_section}
 </body></html>"""
 
 
@@ -163,12 +196,15 @@ def simple_table(rows, label):
 
 
 def main():
-    if len(sys.argv) != 5:
-        print("usage: swanpan-referrals-render <in.json> <out.html> <site> <self_hosts_csv>",
+    if len(sys.argv) not in (5, 6):
+        print("usage: swanpan-referrals-render <in.json> <out.html> <site> "
+              "<self_hosts_csv> [spam_file]",
               file=sys.stderr)
         return 2
     in_json, out_html, site, self_csv = sys.argv[1:5]
+    spam_file = sys.argv[5] if len(sys.argv) > 5 else DEFAULT_SPAM_FILE
     self_hosts = {h.strip().lower() for h in self_csv.split(",") if h.strip()}
+    spam_patterns = load_spam_patterns(spam_file)
 
     with open(in_json) as fh:
         doc = json.load(fh)
@@ -176,14 +212,19 @@ def main():
     panel, rows = load_panel(doc)
 
     external, self_rows, none_count, junk = [], [], 0, []
+    spam_rows = []
     host_counts = Counter()
+    spam_host_counts = Counter()
     for value, n in rows:
-        kind, host = classify(value, self_hosts)
+        kind, host = classify(value, self_hosts, spam_patterns)
         if kind == "external":
             external.append((value, n))
             host_counts[host] += n
         elif kind == "self":
             self_rows.append((value, n))
+        elif kind == "spam":
+            spam_rows.append((value, n))
+            spam_host_counts[host] += n
         elif kind == "none":
             none_count += n
         else:
@@ -193,6 +234,8 @@ def main():
     self_rows.sort(key=lambda r: (-r[1], r[0]))
     hosts = sorted(host_counts.items(), key=lambda kv: (-kv[1], kv[0]))
     junk.sort(key=lambda r: (-r[1], r[0]))
+    spam_rows.sort(key=lambda r: (-r[1], r[0]))
+    spam_hosts = sorted(spam_host_counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
     when = doc.get("general", {}).get("date_time", "")
     if isinstance(when, dict):
@@ -205,8 +248,23 @@ def main():
             ("External hosts", len(hosts)),
             ("Self-referrals", sum(n for _, n in self_rows)),
             ("No referer", none_count),
+            ("Spam blocked", len(spam_rows)),
         ]
     )
+
+    spam_section = ""
+    if spam_rows:
+        spam_section = (
+            f'<h2>Blocked referral spam <span style="color:#5d6679">'
+            f"({len(spam_rows)} URLs, {len(spam_hosts)} hosts)</span></h2>"
+            '<p class="note">Matched against <code>/etc/swanpan-referral-spam.txt</code>. '
+            "Excluded from the external totals above but kept visible here on "
+            "purpose &mdash; a spam list you cannot see is a spam list you stop "
+            "maintaining.</p>"
+            + simple_table(spam_hosts, "Spam host")
+            + '<div style="height:10px"></div>'
+            + table(spam_rows, "")
+        )
 
     unparseable = ""
     if junk:
@@ -230,6 +288,7 @@ def main():
         self_table=table(self_rows, "No self-referrals."),
         n_none=none_count,
         unparseable=unparseable,
+        spam_section=spam_section,
     )
 
     with open(out_html, "w") as fh:
@@ -238,7 +297,7 @@ def main():
     print(
         f"  {site}: panel={panel} external={len(external)} "
         f"hosts={len(hosts)} self={len(self_rows)} none={none_count} "
-        f"junk={len(junk)}"
+        f"spam={len(spam_rows)} junk={len(junk)}"
     )
     return 0
 
