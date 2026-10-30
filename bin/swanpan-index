@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Build /var/www/traffic/index.html -- the landing page for analytics.limeyeti.com.
+
+Scans the report directory for the reports we actually produce, so the index
+cannot go stale. The previous index was hand-written with hardcoded sizes and
+dates, and was two days out of date within hours of being made: the reports
+regenerate every 10 minutes, the index did not.
+
+Run by /usr/local/bin/swanpan-referrals after the referral reports are written,
+and by swanpan-traffic for the main reports. Idempotent and safe to run alone.
+
+Usage: swanpan-index [report_dir]
+"""
+
+import html
+import os
+import re
+import sys
+import time
+
+DEFAULT_DIR = "/var/www/traffic"
+
+# (filename, group title, display label)
+REPORTS = [
+    ("swanpan.html", "Traffic reports", "swanpan.io"),
+    ("hoyoul.html", "Traffic reports", "hoyoul.com"),
+    ("referrals-swanpan.html", "Referral URLs", "swanpan.io — full referral URLs"),
+    ("referrals-hoyoul.html", "Referral URLs", "hoyoul.com — full referral URLs"),
+]
+
+GROUP_BLURB = {
+    "Traffic reports": "Requests, visitors, pages, status codes, countries.",
+    "Referral URLs": "Where visitors came from, with the full URL path. "
+                     "Self-referrals and spam are bucketed separately.",
+}
+
+PAGE = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Traffic reports</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font: 16px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+         max-width: 40rem; margin: 4rem auto; padding: 0 1.25rem; }}
+  h1 {{ font-size: 1.25rem; margin: 0 0 0.25rem; }}
+  .sub {{ margin: 0 0 2.5rem; font-size: 0.8125rem; opacity: 0.6; }}
+  h2 {{ font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em;
+        opacity: 0.6; margin: 2rem 0 0.25rem; }}
+  .blurb {{ font-size: 0.8125rem; opacity: 0.7; margin: 0 0 0.5rem; }}
+  ul {{ list-style: none; padding: 0; margin: 0; }}
+  li {{ display: flex; justify-content: space-between; align-items: baseline;
+        gap: 1rem; padding: 0.7rem 0; border-bottom: 1px solid #8883; }}
+  li.missing {{ opacity: 0.4; }}
+  a {{ text-decoration: none; font-weight: 500; }}
+  a:hover {{ text-decoration: underline; }}
+  .meta {{ font-size: 0.8125rem; opacity: 0.65; white-space: nowrap;
+           font-variant-numeric: tabular-nums; }}
+  footer {{ margin-top: 3rem; font-size: 0.75rem; opacity: 0.5; }}
+</style>
+</head><body>
+<h1>Traffic reports</h1>
+<p class="sub">Generated from nginx access logs by GoAccess. Updated automatically.</p>
+{groups}
+<footer>Private: these pages list visitor IPs. Not indexed, not cached.</footer>
+</body></html>"""
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.0f} {unit}"
+        n /= 1024
+    return f"{n:.0f} GB"
+
+
+def describe(path):
+    """(size, mtime) or None when the report does not exist yet."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if st.st_size == 0:
+        return None
+    return st.st_size, st.st_mtime
+
+
+def main():
+    report_dir = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR
+
+    groups = []
+    current = None
+    items = []
+    for fname, group, label in REPORTS:
+        if current is not None and group != current:
+            groups.append((current, items))
+            items = []
+        current = group
+        info = describe(os.path.join(report_dir, fname))
+        items.append((fname, label, info))
+    if current is not None:
+        groups.append((current, items))
+
+    rendered = []
+    for group, entries in groups:
+        rows = []
+        for fname, label, info in entries:
+            if info:
+                size, mtime = info
+                when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(mtime))
+                # Real middot, not an entity: this string goes straight into
+                # the markup, so an entity here would render literally.
+                meta = f"{human_size(size)} \u00b7 updated {when}"
+                rows.append(
+                    f'<li><a href="{html.escape(fname)}">{html.escape(label)}</a>'
+                    f'<span class="meta">{meta}</span></li>'
+                )
+            else:
+                rows.append(
+                    f'<li class="missing"><span>{html.escape(label)}</span>'
+                    f'<span class="meta">not generated yet</span></li>'
+                )
+        blurb = GROUP_BLURB.get(group, "")
+        rendered.append(
+            f"<h2>{html.escape(group)}</h2>"
+            + (f'<p class="blurb">{html.escape(blurb)}</p>' if blurb else "")
+            + "<ul>" + "".join(rows) + "</ul>"
+        )
+
+    out = os.path.join(report_dir, "index.html")
+    tmp = out + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(PAGE.format(groups="\n".join(rendered)))
+    os.replace(tmp, out)
+    # World-readable: nginx serves it, and the vhost gates it with basic auth.
+    os.chmod(out, 0o644)
+    print(f"wrote {out} ({os.path.getsize(out)} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -18,7 +18,8 @@ else
   SRC=$HERE
 fi
 for cand in "$SRC" "$SRC/bin" /tmp/referral-tools; do
-  if [[ -s $cand/swanpan-referrals && -s $cand/swanpan-referrals-render ]]; then
+  if [[ -s $cand/swanpan-referrals && -s $cand/swanpan-referrals-render \
+        && -s $cand/swanpan-index ]]; then
     SRC=$cand
     break
   fi
@@ -29,7 +30,7 @@ STATE=/var/lib/swanpan-traffic-referrals
 
 SPAM_DST=/etc/swanpan-referral-spam.txt
 
-for f in swanpan-referrals swanpan-referrals-render; do
+for f in swanpan-referrals swanpan-referrals-render swanpan-index; do
   if [[ ! -s $SRC/$f ]]; then
     echo "ERROR: $SRC/$f missing -- copy the files up first" >&2
     exit 1
@@ -38,8 +39,16 @@ done
 
 install -m 0755 -o root -g root "$SRC/swanpan-referrals"        "$BIN/swanpan-referrals"
 install -m 0755 -o root -g root "$SRC/swanpan-referrals-render" "$BIN/swanpan-referrals-render"
+install -m 0755 -o root -g root "$SRC/swanpan-index"            "$BIN/swanpan-index"
 echo "installed:"
-ls -la "$BIN/swanpan-referrals" "$BIN/swanpan-referrals-render"
+ls -la "$BIN/swanpan-referrals" "$BIN/swanpan-referrals-render" "$BIN/swanpan-index"
+
+# Rewrite the landing page now, so it links the new reports immediately rather
+# than waiting for a timer tick. Also replaces the old hand-written index,
+# which had stale hardcoded sizes and dates.
+if /usr/local/bin/swanpan-index "$OUT"; then
+  chown www-data:www-data "$OUT/index.html"
+fi
 
 # Blocklist. Only installed if absent, so local edits survive a re-install.
 SPAM_SRC=""

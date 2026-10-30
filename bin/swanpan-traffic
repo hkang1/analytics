@@ -83,4 +83,10 @@ render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" \
 
 # Staging excluded on purpose: noindex, and its traffic is our own testing.
 
+# Refresh the landing page so it links whatever exists and carries fresh
+# sizes/timestamps. Non-fatal on purpose.
+if [[ -x /usr/local/bin/swanpan-index ]]; then
+  /usr/local/bin/swanpan-index "$OUT" || echo "WARN: index rebuild failed" >&2
+fi
+
 chown -R www-data:www-data "$OUT"

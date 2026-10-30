@@ -100,4 +100,10 @@ render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" \
 
 # Staging excluded: noindex, and the traffic is our own testing.
 
+# Refresh the landing page so the new reports are linked. Non-fatal: a broken
+# index must not make the reports themselves look failed.
+if [[ -x /usr/local/bin/swanpan-index ]]; then
+  /usr/local/bin/swanpan-index "$OUT" || echo "WARN: index rebuild failed" >&2
+fi
+
 chown -R www-data:www-data "$OUT"
