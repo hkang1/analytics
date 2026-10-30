@@ -31,6 +31,7 @@ GoAccess keeps and for country data pulled from nginx's own logs.
 | `/etc/systemd/system/swanpan-traffic.{service,timer}` | oneshot, every 10 min |
 | `/usr/local/bin/swanpan-referrals` | referral-URL report job (from `bin/`) |
 | `/usr/local/bin/swanpan-referrals-render` | its JSON → HTML renderer |
+| `/usr/local/bin/swanpan-index` | rebuilds `/var/www/traffic/index.html` |
 | `/etc/systemd/system/swanpan-referrals.{service,timer}` | oneshot, every 30 min |
 | `/var/lib/swanpan-traffic-referrals/` | **separate** persistence for the above |
 | `/etc/nginx/sites-available/analytics.limeyeti.com` | vhost |
