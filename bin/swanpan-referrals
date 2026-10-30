@@ -50,14 +50,25 @@ render() {
     return 0
   fi
 
-  install -d -m 750 "$STATE/$name"
+  # --db-path is a DIRECTORY (goaccess.conf: "Path where the persisted database
+  # files are stored on disk"). It does NOT create it. Pass a missing dir and
+  # the run dies with:
+  #   src/persistence.c - set_db_path - 67
+  #   Unable to open the specified db path/file '.../db'. No such file or directory
+  # This is exactly how the first install failed. Create it BEFORE calling
+  # goaccess, and do it here rather than in the installer so a manually deleted
+  # state dir self-heals instead of breaking the timer silently.
+  local dbdir="$STATE/$name/db"
+  install -d -m 750 "$dbdir"
+
+  # JSON sits beside it, private (state dir is 750 root) and never served.
   local json="$STATE/$name/referrers.json"
 
   goaccess "$log" \
     --log-format="$FORMAT" \
     --date-format='%d/%b/%Y' \
     --time-format='%H:%M:%S' \
-    --no-global-config --persist --restore --db-path="$STATE/$name/db" \
+    --no-global-config --persist --restore --db-path="$dbdir" \
     --ignore-crawlers \
     --exclude-ip=127.0.0.1 \
     --exclude-ip="$ORIGIN_IP" \

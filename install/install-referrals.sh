@@ -29,6 +29,12 @@ echo "installed:"
 ls -la "$BIN/swanpan-referrals" "$BIN/swanpan-referrals-render"
 
 install -d -m 0750 -o root -g root "$STATE"
+# Per-site db dirs. goaccess does not create these and fails hard without them
+# (persistence.c set_db_path - 67). The runtime script also creates them, so a
+# deleted dir self-heals; doing it here means the first run cannot fail.
+for site in swanpan hoyoul; do
+  install -d -m 0750 -o root -g root "$STATE/$site/db"
+done
 
 # Separate oneshot unit. Deliberately NOT bolted onto swanpan-traffic.service:
 # if this job breaks, the main reports keep generating, and vice versa.
