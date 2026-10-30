@@ -7,11 +7,22 @@
 # Idempotent. Does not touch the existing swanpan-traffic job or its state.
 set -euo pipefail
 
-# Defaults to the sibling bin/ when run from the repo; falls back to the staged
-# copy when run as a standalone upload on the droplet.
+# Find the payload. Tried in order, first one that actually CONTAINS the files
+# wins. Testing for the directory is not enough: run from /tmp and
+# "$HERE/../bin" resolves to /bin, which exists, so a [[ -d ]] check silently
+# picks an empty dir.
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-SRC=${SRC:-$HERE/../bin}
-[[ -d $SRC ]] || SRC=/tmp/referral-tools
+if [[ $HERE == */install ]]; then
+  SRC=$(cd "$HERE/.." && pwd)
+else
+  SRC=$HERE
+fi
+for cand in "$SRC" "$SRC/bin" /tmp/referral-tools; do
+  if [[ -s $cand/swanpan-referrals && -s $cand/swanpan-referrals-render ]]; then
+    SRC=$cand
+    break
+  fi
+done
 BIN=/usr/local/bin
 OUT=/var/www/traffic
 STATE=/var/lib/swanpan-traffic-referrals
@@ -31,15 +42,20 @@ echo "installed:"
 ls -la "$BIN/swanpan-referrals" "$BIN/swanpan-referrals-render"
 
 # Blocklist. Only installed if absent, so local edits survive a re-install.
-if [[ -s $SRC/../etc/referral-spam.txt ]]; then
+SPAM_SRC=""
+for cand in "$SRC/etc/referral-spam.txt" "$SRC/../etc/referral-spam.txt" \
+            "$SRC/referral-spam.txt" /tmp/referral-tools/referral-spam.txt; do
+  [[ -s $cand ]] && { SPAM_SRC=$cand; break; }
+done
+if [[ -n $SPAM_SRC ]]; then
   if [[ -f $SPAM_DST ]]; then
-    echo "kept existing $SPAM_DST"
+    echo "kept existing $SPAM_DST (not overwritten)"
   else
-    install -m 0644 -o root -g root "$SRC/../etc/referral-spam.txt" "$SPAM_DST"
-    echo "installed $SPAM_DST"
+    install -m 0644 -o root -g root "$SPAM_SRC" "$SPAM_DST"
+    echo "installed $SPAM_DST (from $SPAM_SRC)"
   fi
-elif [[ -f /tmp/referral-tools/referral-spam.txt ]]; then
-  [[ -f $SPAM_DST ]] || install -m 0644 -o root -g root /tmp/referral-tools/referral-spam.txt "$SPAM_DST"
+else
+  echo "WARNING: no referral-spam.txt found -- spam filtering will be off" >&2
 fi
 
 install -d -m 0750 -o root -g root "$STATE"
