@@ -29,9 +29,13 @@ GoAccess keeps and for country data pulled from nginx's own logs.
 |---|---|
 | `/usr/local/bin/swanpan-traffic` | report job (from `bin/`) |
 | `/etc/systemd/system/swanpan-traffic.{service,timer}` | oneshot, every 10 min |
+| `/usr/local/bin/swanpan-referrals` | referral-URL report job (from `bin/`) |
+| `/usr/local/bin/swanpan-referrals-render` | its JSON → HTML renderer |
+| `/etc/systemd/system/swanpan-referrals.{service,timer}` | oneshot, every 30 min |
+| `/var/lib/swanpan-traffic-referrals/` | **separate** persistence for the above |
 | `/etc/nginx/sites-available/analytics.limeyeti.com` | vhost |
 | `/etc/nginx/conf.d/{cloudflare-realip,swanpan-logformat,swanpan-cfcountry}.conf` | real IP + log format |
-| `/var/www/traffic/` | generated reports (`www-data`, `750`) |
+| `/var/www/traffic/` | generated reports (`www-data`, `750`) — incl. `referrals-<site>.html` |
 | `/var/lib/swanpan-traffic/<site>/` | GoAccess persistence, one dir per site |
 | `/etc/nginx/.htpasswd-limeyeti` | basic auth, `640 root:www-data` |
 
@@ -111,6 +115,62 @@ Every one of these cost real time. They are not hypothetical.
 11. **A green timer and a rewritten report do not mean the filters applied.**
     Both were true while self-referrals were still visible. Check the content of
     the panel you changed, in the format the tool stores it.
+
+## Referral URLs (full path, not just the host)
+
+Two GoAccess panels, and they are not the same thing:
+
+| Panel | Shows | Default |
+|---|---|---|
+| `REFERRING_SITES` | host only — `google.com` | enabled |
+| `REFERRERS` | **full URL** — `google.com/search?q=...` | **disabled** |
+
+The shipped `/etc/goaccess/goaccess.conf` contains `ignore-panel REFERRERS`
+(line 534). That is why the main reports only ever show hosts: the full-URL
+data is parsed and then thrown away. Our `log_format` already records
+`"$http_referer"`, so nothing needs re-logging — only re-displaying.
+
+`swanpan-referrals` produces `referrals-swanpan.html` and
+`referrals-hoyoul.html` alongside the main reports, served from the same
+basic-auth vhost.
+
+### Why the self-referral filter is Python, not `--hide-referrer`
+
+`--hide-referrer` is an **exact match** on the stored value. The `REFERRERS`
+panel stores the **full URL including the path**, so the set of values to hide
+is unbounded — `https://www.swanpan.io/store`, `/learn`, `/learn/1-2`, and every
+other path the site can build. No fixed needle list covers that, and wildcards
+are documented for `--ignore-referrer` but **not** for `--hide-referrer`.
+
+So `swanpan-referrals` asks GoAccess for unfiltered JSON and filters **by host**
+in `swanpan-referrals-render`. That is the rule we actually want: drop referers
+whose host is one of ours. Empirically, a bare `https://www.swanpan.io` needle
+hides **0** of the 265 path-bearing rows; only exact full-URL forms match, and
+those change every time a new route ships.
+
+The report keeps four buckets rather than one flat list:
+
+- **External referral URLs** — the useful one
+- **External referring hosts** — deduped by host
+- **Self-referrals** — internal navigation, kept visible but labelled
+- **No referer** — the count of hits with no `Referer` header at all
+
+That last bucket matters more than it looks. A share near zero on a site with
+real traffic means most hits are logged-in navigation, not new arrivals.
+
+### Separate state dir, on purpose
+
+`/var/lib/swanpan-traffic-referrals/`, not `/var/lib/swanpan-traffic/`. The main
+job's state was seeded under different flags, and `--persist`/`--restore`
+replays already-ingested rows — sharing it would resurrect rows this report
+exists to exclude. The two jobs cannot poison each other.
+
+### Referer values are attacker-controlled
+
+Real garbage in our logs: `https://google.com, http://www.hoyoul.com/photos/...`
+— two URLs stuffed into one header. The renderer splits on the comma and
+classifies by the **last** URL, then buckets anything that will not parse as a
+URL into **Unparseable referers** rather than dropping it silently.
 
 ## Referrer filtering
 

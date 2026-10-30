@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Render a GoAccess JSON dump into a referral-URL HTML report.
+
+Called by /usr/local/bin/swanpan-referrals. Not meant to be run by hand,
+though it is harmless: it only reads the JSON and writes one HTML file.
+
+Why this exists instead of using GoAccess's own HTML output: GoAccess cannot
+express "hide every referer whose host is mine". Its --hide-referrer is an exact
+match on the stored value, and the REFERRERS panel stores full URLs with paths,
+so the set of values to hide is unbounded. Filtering by host after the fact is
+both simpler and the actual rule we want.
+
+The report is served behind basic auth alongside the main GoAccess reports.
+It contains referral URLs, which can carry query strings, so it is treated as
+private: noindex, no-store are set by the vhost for the whole directory.
+"""
+
+import html
+import json
+import sys
+from collections import Counter
+from urllib.parse import urlsplit
+
+
+def load_panel(doc):
+    """GoAccess emits the panel we want under one of two keys depending on
+    version and flags. REFERRERS is the full-URL one; REFERRING_SITES is the
+    host-only fallback. Prefer REFERRERS."""
+    for key in ("referrers", "referring_sites"):
+        if key in doc and isinstance(doc[key], dict):
+            rows = doc[key].get("data") or []
+            out = []
+            for r in rows:
+                val = r.get("data")
+                if val is None:
+                    continue
+                hits = r.get("hits")
+                if isinstance(hits, dict):
+                    hits = hits.get("count", 0)
+                out.append((str(val), int(hits or 0)))
+            if out:
+                return key, out
+    return None, []
+
+
+def host_of(url):
+    """Bare host of a referer value, or '' when it is not a URL.
+
+    Referer headers are attacker-controlled, and we have real garbage in the
+    logs: 'https://google.com, http://www.hoyoul.com/photos/...' is two URLs in
+    one header. urlsplit on that yields a host with a comma and a space in it,
+    which is nonsense but harmless here -- it simply will not match a self host.
+    """
+    url = url.strip()
+    if not url or url == "-":
+        return ""
+    # A comma-joined double URL: classify by the LAST one, which is usually the
+    # real site; the first is the spammer's decoration.
+    if "," in url:
+        url = url.split(",")[-1].strip()
+    if "://" not in url:
+        url = "//" + url.lstrip("/")
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def classify(value, self_hosts):
+    host = host_of(value)
+    if not value or value.strip() == "-":
+        return "none", ""
+    if not host:
+        return "junk", ""
+    if host in self_hosts:
+        return "self", host
+    return "external", host
+
+
+PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>{title}</title>
+<style>
+:root{{color-scheme:dark}}
+*{{box-sizing:border-box}}
+body{{margin:0;padding:24px;background:#14161c;color:#e6e8ee;
+ font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}
+h1{{font-size:18px;margin:0 0 4px}} h2{{font-size:14px;margin:28px 0 8px;
+ color:#9aa3b8;text-transform:uppercase;letter-spacing:.06em}}
+.sub{{color:#7c8698;margin:0 0 20px;font-size:12px}}
+.stats{{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 8px}}
+.card{{background:#1c1f28;border:1px solid #2a2f3c;border-radius:8px;
+ padding:10px 14px;min-width:120px}}
+.card b{{display:block;font-size:20px;color:#fff}}
+.card span{{font-size:11px;color:#8b94a8;text-transform:uppercase;
+ letter-spacing:.05em}}
+table{{width:100%;border-collapse:collapse;background:#1c1f28;
+ border:1px solid #2a2f3c;border-radius:8px;overflow:hidden}}
+th,td{{text-align:left;padding:7px 12px;border-bottom:1px solid #262b36;
+ vertical-align:top}}
+th{{background:#22262f;color:#9aa3b8;font-size:11px;text-transform:uppercase;
+ letter-spacing:.05em;position:sticky;top:0}}
+tr:last-child td{{border-bottom:0}}
+td.n{{text-align:right;width:70px;color:#8fa8ff;font-variant-numeric:tabular-nums}}
+td.u{{word-break:break-all}}
+a{{color:#8fa8ff}}
+.empty{{padding:16px;color:#7c8698}}
+.note{{margin:10px 0 0;font-size:12px;color:#7c8698;max-width:80ch}}
+</style></head><body>
+<h1>{title}</h1>
+<p class="sub">Full referral URLs from the nginx access log. Generated {when}.</p>
+<div class="stats">{cards}</div>
+
+<h2>External referral URLs <span style="color:#5d6679">({n_external})</span></h2>
+{external}
+
+<h2>External referring hosts <span style="color:#5d6679">({n_hosts})</span></h2>
+{hosts}
+
+<h2>Self-referrals <span style="color:#5d6679">({n_self})</span> <span style="color:#5d6679;text-transform:none;letter-spacing:0">&mdash; internal navigation, not acquisition</span></h2>
+{self_table}
+
+<h2>No referer <span style="color:#5d6679">({n_none})</span></h2>
+<p class="note">Requests with no Referer header. Direct visits, bookmarks,
+native apps, and privacy settings all land here. A high share is normal for a
+site people return to; a share near zero on a site with real traffic usually
+means most hits are logged-in navigation.</p>
+{unparseable}
+</body></html>"""
+
+
+def table(rows, empty_msg):
+    if not rows:
+        return f'<div class="empty">{html.escape(empty_msg)}</div>'
+    body = []
+    for value, n in rows:
+        body.append(
+            f'<tr><td class="n">{n}</td>'
+            f'<td class="u"><a href="{html.escape(value, quote=True)}" '
+            f'rel="nofollow noopener noreferrer" target="_blank">'
+            f"{html.escape(value)}</a></td></tr>"
+        )
+    return (
+        '<table><thead><tr><th>Hits</th><th>Referral URL</th></tr></thead>'
+        "<tbody>" + "".join(body) + "</tbody></table>"
+    )
+
+
+def simple_table(rows, label):
+    if not rows:
+        return '<div class="empty">None.</div>'
+    body = "".join(
+        f'<tr><td class="n">{n}</td><td class="u">{html.escape(v)}</td></tr>'
+        for v, n in rows
+    )
+    return (
+        f'<table><thead><tr><th>Hits</th><th>{label}</th></tr></thead>'
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
+def main():
+    if len(sys.argv) != 5:
+        print("usage: swanpan-referrals-render <in.json> <out.html> <site> <self_hosts_csv>",
+              file=sys.stderr)
+        return 2
+    in_json, out_html, site, self_csv = sys.argv[1:5]
+    self_hosts = {h.strip().lower() for h in self_csv.split(",") if h.strip()}
+
+    with open(in_json) as fh:
+        doc = json.load(fh)
+
+    panel, rows = load_panel(doc)
+
+    external, self_rows, none_count, junk = [], [], 0, []
+    host_counts = Counter()
+    for value, n in rows:
+        kind, host = classify(value, self_hosts)
+        if kind == "external":
+            external.append((value, n))
+            host_counts[host] += n
+        elif kind == "self":
+            self_rows.append((value, n))
+        elif kind == "none":
+            none_count += n
+        else:
+            junk.append((value, n))
+
+    external.sort(key=lambda r: (-r[1], r[0]))
+    self_rows.sort(key=lambda r: (-r[1], r[0]))
+    hosts = sorted(host_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    junk.sort(key=lambda r: (-r[1], r[0]))
+
+    when = doc.get("general", {}).get("date_time", "")
+    if isinstance(when, dict):
+        when = when.get("data", "")
+
+    cards = "".join(
+        f'<div class="card"><b>{v}</b><span>{k}</span></div>'
+        for k, v in [
+            ("External URLs", len(external)),
+            ("External hosts", len(hosts)),
+            ("Self-referrals", sum(n for _, n in self_rows)),
+            ("No referer", none_count),
+        ]
+    )
+
+    unparseable = ""
+    if junk:
+        unparseable = (
+            f'<h2>Unparseable referers <span style="color:#5d6679">'
+            f"({len(junk)})</span></h2>"
+            + '<p class="note">Values that are not a single well-formed URL. '
+            "Usually spam networks stuffing multiple URLs into one header.</p>"
+            + table(junk, "")
+        )
+
+    out = PAGE.format(
+        title=f"{site} &mdash; referral URLs",
+        when=html.escape(str(when)),
+        cards=cards,
+        n_external=len(external),
+        external=table(external, "No external referral URLs logged."),
+        n_hosts=len(hosts),
+        hosts=simple_table(hosts, "Host"),
+        n_self=sum(n for _, n in self_rows),
+        self_table=table(self_rows, "No self-referrals."),
+        n_none=none_count,
+        unparseable=unparseable,
+    )
+
+    with open(out_html, "w") as fh:
+        fh.write(out)
+
+    print(
+        f"  {site}: panel={panel} external={len(external)} "
+        f"hosts={len(hosts)} self={len(self_rows)} none={none_count} "
+        f"junk={len(junk)}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
