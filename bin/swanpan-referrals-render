@@ -96,13 +96,38 @@ def is_spam(host, patterns):
     return any(fnmatch.fnmatchcase(h, p) for p in patterns)
 
 
+def is_self_host(host, self_hosts):
+    """True when host is one of our domains, or a subdomain of one.
+
+    Exact match or '.<domain>' suffix -- NOT a plain string suffix and NOT a
+    regex.
+
+    Why not the obvious regex (^https?://[^.]*\\.?<domain>): '[^.]*\\.?' makes
+    the dot optional, so 'https://somehoyoul.com/x' matches and is classified
+    as our own site. Any spammer who registers <ourname>.com then has their
+    referral silently filed as internal navigation and it disappears from the
+    external list. Silently hiding real acquisition traffic is worse than
+    showing spam.
+
+    '.<domain>' also blocks the suffix attacks: 'hoyoul.com.evil.net' and
+    'not-hoyoul.com' are neither equal to 'hoyoul.com' nor end with
+    '.hoyoul.com'.
+    """
+    if not host:
+        return False
+    for d in self_hosts:
+        if host == d or host.endswith("." + d):
+            return True
+    return False
+
+
 def classify(value, self_hosts, spam_patterns=()):
     host = host_of(value)
     if not value or value.strip() == "-":
         return "none", ""
     if not host:
         return "junk", ""
-    if host in self_hosts:
+    if is_self_host(host, self_hosts):
         return "self", host
     if is_spam(host, spam_patterns):
         return "spam", host

@@ -91,12 +91,19 @@ render() {
 }
 
 # swanpan's own hosts. Everything else is genuinely external.
+# SELF DOMAINS: registrable domains only. The matcher treats any subdomain as
+# self too (exact host, or '.<domain>' suffix), so 'www.' entries are redundant
+# -- listing them is harmless but misleading, as if www were a separate site.
+# Matched on the parsed HOST, never on the raw URL string: a regex like
+# ^https?://[^.]*\.?swanpan\.io also matches 'evil-swanpan.io', which would
+# silently file a spammer's referral as our own internal navigation.
 render swanpan "${LOG_DIR}/swanpan-prod.access.log" \
-  'swanpan.io,www.swanpan.io,174.138.42.13'
+  'swanpan.io,174.138.42.13'
 
-# hoyoul serves four hostnames across two domains.
+# hoyoul serves two registrable domains from one log: hoyoul.com and
+# calebkang.com. Both, and all their subdomains, count as self.
 render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" \
-  'hoyoul.com,www.hoyoul.com,calebkang.com,www.calebkang.com,174.138.42.13'
+  'hoyoul.com,calebkang.com,174.138.42.13'
 
 # Staging excluded: noindex, and the traffic is our own testing.
 
