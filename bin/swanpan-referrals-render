@@ -145,8 +145,7 @@ PAGE = """<!DOCTYPE html>
 *{{box-sizing:border-box}}
 body{{margin:0;padding:24px;background:#14161c;color:#e6e8ee;
  font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}
-h1{{font-size:18px;margin:0 0 4px}} h2{{font-size:14px;margin:28px 0 8px;
- color:#9aa3b8;text-transform:uppercase;letter-spacing:.06em}}
+h1{{font-size:18px;margin:0 0 4px}}
 .sub{{color:#7c8698;margin:0 0 20px;font-size:12px}}
 .stats{{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 8px}}
 .card{{background:#1c1f28;border:1px solid #2a2f3c;border-radius:8px;
@@ -166,28 +165,59 @@ td.u{{word-break:break-all}}
 a{{color:#8fa8ff}}
 .empty{{padding:16px;color:#7c8698}}
 .note{{margin:10px 0 0;font-size:12px;color:#7c8698;max-width:80ch}}
+details{{margin:22px 0 0;border:1px solid #2a2f3c;border-radius:8px;
+ background:#181b23;overflow:hidden}}
+details[open]{{background:transparent}}
+summary{{cursor:pointer;padding:11px 14px;background:#1c1f28;
+ font-size:13px;color:#c3cadb;text-transform:uppercase;
+ letter-spacing:.06em;list-style:none;
+ display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;
+ user-select:none}}
+summary::-webkit-details-marker{{display:none}}
+summary::before{{content:"\25B8";color:#5d6679;font-size:11px;
+ transition:transform .12s ease;display:inline-block}}
+details[open]>summary::before{{transform:rotate(90deg)}}
+summary:hover{{background:#22262f;color:#e6e8ee}}
+summary:focus-visible{{outline:2px solid #8fa8ff;outline-offset:-2px}}
+details>.body{{padding:0 14px 14px}}
+details>.body>p.note:first-child{{margin-top:0}}
+.cnt{{color:#5d6679;font-variant-numeric:tabular-nums}}
+.hint{{color:#5d6679;text-transform:none;letter-spacing:0;font-weight:400;
+ margin-left:2px}}
+details>.body table{{margin-top:4px}}
 </style></head><body>
 <h1>{title}</h1>
 <p class="sub">Full referral URLs from the nginx access log. Generated {when}.</p>
 <div class="stats">{cards}</div>
 
-<h2>External referral URLs <span style="color:#5d6679">({n_external})</span></h2>
-{external}
-
-<h2>External referring hosts <span style="color:#5d6679">({n_hosts})</span></h2>
-{hosts}
-
-<h2>Self-referrals <span style="color:#5d6679">({n_self})</span> <span style="color:#5d6679;text-transform:none;letter-spacing:0">&mdash; internal navigation, not acquisition</span></h2>
-{self_table}
-
-<h2>No referer <span style="color:#5d6679">({n_none})</span></h2>
-<p class="note">Requests with no Referer header. Direct visits, bookmarks,
-native apps, and privacy settings all land here. A high share is normal for a
-site people return to; a share near zero on a site with real traffic usually
-means most hits are logged-in navigation.</p>
+{sec_external}
+{sec_hosts}
+{sec_self}
+{sec_none}
 {unparseable}
 {spam_section}
 </body></html>"""
+
+
+def section(name, count_label, body, open_by_default=False, hint=""):
+    """One collapsible report section, as a native <details> element.
+
+    Native <details>/<summary> rather than a JS accordion: it works with JS
+    disabled, survives Ctrl-S / "save page", and printing keeps whatever was
+    open. No script to break and nothing to ship alongside the report.
+
+    Only the summary is inside <summary> -- interactive content (links) must
+    stay in the body, because clicks on summary children toggle the panel.
+    """
+    hint_html = (f'<span class="hint">\u2014 {html.escape(hint)}</span>'
+                 if hint else "")
+    return (
+        f'<details{" open" if open_by_default else ""}>'
+        f'<summary>{html.escape(name)} '
+        f'<span class="cnt">({count_label})</span>{hint_html}</summary>'
+        f'<div class="body">{body}</div>'
+        "</details>"
+    )
 
 
 def table(rows, empty_msg):
@@ -279,39 +309,59 @@ def main():
 
     spam_section = ""
     if spam_rows:
-        spam_section = (
-            f'<h2>Blocked referral spam <span style="color:#5d6679">'
-            f"({len(spam_rows)} URLs, {len(spam_hosts)} hosts)</span></h2>"
-            '<p class="note">Matched against <code>/etc/swanpan-referral-spam.txt</code>. '
-            "Excluded from the external totals above but kept visible here on "
-            "purpose &mdash; a spam list you cannot see is a spam list you stop "
-            "maintaining.</p>"
+        spam_section = section(
+            "Blocked referral spam",
+            f"{len(spam_rows)} URLs, {len(spam_hosts)} hosts",
+            '<p class="note">Matched against '
+            "<code>/etc/swanpan-referral-spam.txt</code>. Excluded from the "
+            "external totals above but kept visible here on purpose \u2014 a "
+            "spam list you cannot see is a spam list you stop maintaining.</p>"
             + simple_table(spam_hosts, "Spam host")
             + '<div style="height:10px"></div>'
-            + table(spam_rows, "")
+            + table(spam_rows, ""),
         )
 
     unparseable = ""
     if junk:
-        unparseable = (
-            f'<h2>Unparseable referers <span style="color:#5d6679">'
-            f"({len(junk)})</span></h2>"
-            + '<p class="note">Values that are not a single well-formed URL. '
+        unparseable = section(
+            "Unparseable referers",
+            len(junk),
+            '<p class="note">Values that are not a single well-formed URL. '
             "Usually spam networks stuffing multiple URLs into one header.</p>"
-            + table(junk, "")
+            + table(junk, ""),
         )
 
     out = PAGE.format(
         title=f"{site} &mdash; referral URLs",
         when=html.escape(str(when)),
         cards=cards,
-        n_external=len(external),
-        external=table(external, "No external referral URLs logged."),
-        n_hosts=len(hosts),
-        hosts=simple_table(hosts, "Host"),
-        n_self=sum(n for _, n in self_rows),
-        self_table=table(self_rows, "No self-referrals."),
-        n_none=none_count,
+        # External URLs open by default: it is the only section that answers
+        # "where did these people come from". Everything else is either
+        # supportive (hosts) or noise to be read when something looks off.
+        sec_external=section(
+            "External referral URLs", len(external),
+            table(external, "No external referral URLs logged."),
+            open_by_default=True,
+        ),
+        sec_hosts=section(
+            "External referring hosts", len(hosts),
+            simple_table(hosts, "Host"),
+        ),
+        sec_self=section(
+            "Self-referrals", sum(n for _, n in self_rows),
+            table(self_rows, "No self-referrals."),
+            hint="internal navigation, not acquisition",
+        ),
+        # No <details> for this one: there is no table to hide, only a count
+        # and an explanation. An accordion that only ever reveals a sentence is
+        # worse than just saying it.
+        sec_none=(
+            '<div class="note" style="margin-top:22px">'
+            f'<b style="color:#c3cadb">{none_count}</b> requests had no Referer '
+            "header \u2014 direct visits, bookmarks, native apps, privacy "
+            "settings, and logged-in navigation. No table to show: by "
+            "definition there is no URL.</div>"
+        ),
         unparseable=unparseable,
         spam_section=spam_section,
     )
