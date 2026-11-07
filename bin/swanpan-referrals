@@ -105,6 +105,10 @@ render swanpan "${LOG_DIR}/swanpan-prod.access.log" \
 render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" \
   'hoyoul.com,calebkang.com,174.138.42.13'
 
+# minehunt: one registrable domain, plus www (matched as a subdomain).
+render minehunt "${LOG_DIR}/minehunt-prod.access.log" \
+  'minehunt.com,174.138.42.13'
+
 # Staging excluded: noindex, and the traffic is our own testing.
 
 # Refresh the landing page so the new reports are linked. Non-fatal: a broken

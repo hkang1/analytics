@@ -24,8 +24,10 @@ DEFAULT_DIR = "/var/www/traffic"
 REPORTS = [
     ("swanpan.html", "Traffic reports", "swanpan.io"),
     ("hoyoul.html", "Traffic reports", "hoyoul.com"),
+    ("minehunt.html", "Traffic reports", "minehunt.com"),
     ("referrals-swanpan.html", "Referral URLs", "swanpan.io — full referral URLs"),
     ("referrals-hoyoul.html", "Referral URLs", "hoyoul.com — full referral URLs"),
+    ("referrals-minehunt.html", "Referral URLs", "minehunt.com — full referral URLs"),
 ]
 
 GROUP_BLURB = {
