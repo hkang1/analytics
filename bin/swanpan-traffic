@@ -81,6 +81,15 @@ render hoyoul "${LOG_DIR}/hoyoul-prod.access.log" \
   'calebkang.com'   'www.calebkang.com' \
   '174.138.42.13'   '174.138.42.13:443'
 
+# minehunt. Its vhost logged with the stock 'combined' format until
+# 2026-11-07; that line has no $request_time and no $cf_ipcountry, so the
+# GoAccess format above cannot parse it. The old file was rotated aside when
+# the vhost was switched, which is why this reads the same log path as the
+# other sites rather than a separate one.
+render minehunt "${LOG_DIR}/minehunt-prod.access.log" \
+  'minehunt.com'   'www.minehunt.com' \
+  '174.138.42.13'   '174.138.42.13:443'
+
 # Staging excluded on purpose: noindex, and its traffic is our own testing.
 
 # Refresh the landing page so it links whatever exists and carries fresh
