@@ -56,8 +56,19 @@ server {
     location / {
         root /var/www/traffic;
         index index.html;
-        auth_basic "Traffic reports";
-        auth_basic_user_file /etc/nginx/.htpasswd-limeyeti;
+        # No auth_basic here any more: access is enforced at the edge by
+        # Cloudflare Access (app "Analytics reports", allow-list by email), which
+        # redirects unauthenticated visitors to a Cloudflare login before the
+        # request ever reaches this vhost.
+        #
+        # The password file and the old basic-auth config are gone rather than
+        # merely disabled, so there is one place that decides who gets in. A
+        # second, stale credential store on the box is a liability: it is another
+        # password to leak and another thing that looks like a control.
+        #
+        # This relies on the origin answering only Cloudflare (see the packet
+        # filter in the README). Without that, a direct hit on the droplet would
+        # bypass the edge and reach these reports with no login at all.
         autoindex off;
         try_files $uri $uri/ =404;
     }

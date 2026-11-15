@@ -23,9 +23,10 @@ set -euo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 DOMAIN=analytics.limeyeti.com
-AUTH_USER=hoyoul
 TRAFFIC_DIR=/var/www/traffic
 STATE_DIR=/var/lib/swanpan-traffic
+# Only referenced by the warning in step 7, so an operator knows what to delete.
+# Nothing in this repo reads it any more: Cloudflare Access guards the hostname.
 HTPASSWD=/etc/nginx/.htpasswd-limeyeti
 
 say() { printf '\n== %s\n' "$*"; }
@@ -97,20 +98,29 @@ for v in swanpan-prod swanpan-staging hoyoul-prod; do
   fi
 done
 
-say "7. Basic auth"
+say "7. Access (removed from the origin)"
+# Basic auth used to live here. Access is now decided by Cloudflare Access at
+# the edge -- an allow-list by email, in front of the whole hostname -- so the
+# origin no longer keeps a password file at all.
+#
+# Removing it is deliberate: two overlapping password stores means two things to
+# rotate and two things to misconfigure, and the one on the box would still be
+# reachable by anything that can talk to the droplet directly. The edge is the
+# single place that answers "may this person in?".
+#
+# What this script therefore does NOT do: create $HTPASSWD. If a leftover file
+# exists from an older install it is reported, not deleted, so the operator
+# chooses when that credential stops existing.
 if [[ -f $HTPASSWD ]]; then
-  echo "   existing $HTPASSWD kept"
+  echo "   WARNING  $HTPASSWD still exists but nothing reads it."
+  echo "            Delete it once Cloudflare Access is confirmed working:"
+  echo "              rm $HTPASSWD"
 else
-  PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
-  install -m 640 -o root -g www-data /dev/null "$HTPASSWD"
-  # -b: password on the command line. It is visible in this process's argv
-  # for a moment; the alternative (stdin) still ends up in shell history here.
-  htpasswd -b "$HTPASSWD" "$AUTH_USER" "$PW" >/dev/null
-  echo "   generated credentials -- SAVE THESE, only the hash is stored:"
-  echo
-  echo "       user:     $AUTH_USER"
-  echo "       password: $PW"
-  echo
+  echo "   no password file, as expected"
+fi
+if command -v nginx >/dev/null; then
+  echo "   NOTE     the origin must only answer Cloudflare (see the packet"
+  echo "            filter). Without it, a direct hit bypasses Access entirely."
 fi
 
 say "8. The analytics vhost"

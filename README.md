@@ -2,7 +2,7 @@
 
 Traffic reporting for **swanpan.io** and **hoyoul.com**, from nginx access logs,
 rendered as static HTML by [GoAccess](https://goaccess.io) and served behind
-basic auth at <https://analytics.limeyeti.com/>.
+behind **Cloudflare Access** at <https://analytics.limeyeti.com/>.
 
 It exists on its own domain and its own vhost on purpose: a mistake here cannot
 break checkout or sign-in on the product sites. Nothing in this repo touches the
@@ -38,7 +38,7 @@ GoAccess keeps and for country data pulled from nginx's own logs.
 | `/etc/nginx/conf.d/{cloudflare-realip,swanpan-logformat,swanpan-cfcountry}.conf` | real IP + log format |
 | `/var/www/traffic/` | generated reports (`www-data`, `750`) — incl. `referrals-<site>.html` |
 | `/var/lib/swanpan-traffic/<site>/` | GoAccess persistence, one dir per site |
-| `/etc/nginx/.htpasswd-limeyeti` | basic auth, `640 root:www-data` |
+| _(none)_ | no origin password file: Cloudflare Access guards the hostname |
 
 The reports live **outside** the product web roots so a deploy can't wipe them
 or sync them back into git.
@@ -51,6 +51,30 @@ sudo bash install/install.sh
 
 Idempotent; safe to re-run. It copies files, creates directories, reloads nginx
 and can issue the certificate if one is missing.
+
+## Access
+
+The hostname is protected by **Cloudflare Access**, not by the origin.
+
+- Application: *Analytics reports*, self-hosted, `analytics.limeyeti.com`,
+  session 168h.
+- Policy: *allow* if the email is on the list.
+- Identity provider: One-time PIN (the 6-digit code Cloudflare emails), issued
+  and rate-limited by Cloudflare.
+
+An unauthenticated request therefore gets a `302` to
+`<team>.cloudflareaccess.com/cdn-cgi/access/login/...`. Seeing a `401` with
+`WWW-Authenticate: Cloudflare-Access` means the edge did its job but the visitor
+was not in the allow-list.
+
+There is deliberately **no** `auth_basic` in the vhost and no password file on
+the box. Two overlapping credential stores mean two things to rotate and two
+things to misconfigure; the edge is the single place that answers "may this
+person in?". `install.sh` reports a leftover `/etc/nginx/.htpasswd-limeyeti`
+rather than deleting it, so the operator decides when that credential dies.
+
+This is only sound because of **Origin lock** below: an origin that answers
+anyone but Cloudflare makes edge auth decorative.
 
 ## Traps worth knowing
 
