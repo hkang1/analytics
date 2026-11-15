@@ -128,34 +128,61 @@ install -m 644 "$REPO/nginx/analytics.limeyeti.com" /etc/nginx/sites-available/$
 ln -sfn /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/$DOMAIN
 echo "   linked into sites-enabled"
 
-say "9. Certificate"
-if [[ -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
-  echo "   existing: $(openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/cert.pem)"
-else
-  echo "   none yet -- issuing via webroot"
-  mkdir -p /var/www/html/.well-known/acme-challenge
-  # The vhost must be live for validation to succeed, so test and reload with
-  # the certificate lines temporarily absent is not possible; nginx -t would
-  # fail. Instead: run certonly in --standalone only if webroot cannot work.
-  if nginx -t >/dev/null 2>&1; then
-    systemctl reload nginx
-    certbot certonly --webroot -w /var/www/html -d "$DOMAIN" \
-      --non-interactive --agree-tos --register-unsafely-without-email || {
-        echo "   webroot failed; trying standalone (stops nginx briefly)"
-        systemctl stop nginx
-        certbot certonly --standalone -d "$DOMAIN" \
-          --non-interactive --agree-tos --register-unsafely-without-email
-        systemctl start nginx
-      }
-  else
-    echo "   nginx config invalid; cannot issue. Fix nginx -t first." >&2
-    exit 1
-  fi
+say "9. Certificate (Cloudflare Origin CA)"
+# Not Let's Encrypt. The origin answers Cloudflare alone, so a public CA never
+# needs to reach it -- and that removes the whole renewal path: no ACME
+# challenge to serve, no certbot timer to fail quietly, no 90-day cliff.
+#
+# The cert is issued in the Cloudflare dashboard (SSL/TLS -> Origin Server)
+# from a CSR generated here, so the private key never leaves this box. The
+# installer cannot create it for you; it checks what is there and tells you
+# exactly what is wrong, because a mismatch is otherwise only discovered when
+# nginx refuses to start.
+CERT=/etc/ssl/cloudflare/$DOMAIN.pem
+KEY=/etc/ssl/cloudflare/$DOMAIN.key
+install -d -m 700 /etc/ssl/cloudflare
+
+if [[ ! -f $CERT || ! -f $KEY ]]; then
+  echo "   MISSING  one or both of:"
+  echo "              $CERT"
+  echo "              $KEY"
+  echo
+  echo "   Generate a key and CSR here, then paste the CSR into"
+  echo "   Cloudflare -> SSL/TLS -> Origin Server -> Create Certificate:"
+  echo
+  echo "     cd /etc/ssl/cloudflare"
+  echo "     openssl req -new -newkey rsa:2048 -nodes \\"
+  echo "       -keyout $DOMAIN.key -out $DOMAIN.csr \\"
+  echo "       -subj '/CN=$DOMAIN'"
+  echo "     cat $DOMAIN.csr"
+  echo
+  echo "   Save the returned certificate (BOTH blocks: leaf then intermediate)"
+  echo "   as $CERT, then re-run this script."
+  exit 1
+fi
+
+# Cert and key must belong to each other. Comparing the public halves catches a
+# key regenerated after the CSR was signed, which nginx otherwise reports only
+# as "key values mismatch" at reload time.
+if [[ "$(openssl x509 -in "$CERT" -noout -pubkey | openssl md5)" != \
+      "$(openssl pkey -in "$KEY" -pubout | openssl md5)" ]]; then
+  echo "   MISMATCH  $CERT and $KEY do not belong together." >&2
+  exit 1
+fi
+
+echo "   cert: $(openssl x509 -in "$CERT" -noout -subject -enddate | tr '\n' ' ')"
+echo "   key matches cert"
+if openssl x509 -in "$CERT" -noout -issuer | grep -qi 'Origin CA'; then
+  echo "   issuer: Cloudflare Origin CA (only Cloudflare trusts this -- expected)"
 fi
 
 say "10. nginx test and reload"
 nginx -t
-systemctl reload nginx
+# Restart, not reload: a removed password file or a replaced certificate is not
+# always picked up by a reload, and the difference is a vhost that silently keeps
+# answering with the old behaviour. Verified on the live box: removing the
+# htpasswd file needed a restart before nginx stopped reading it.
+systemctl restart nginx
 
 say "11. Generate reports once"
 systemctl start swanpan-traffic.service

@@ -1,11 +1,18 @@
 # Analytics reports for swanpan.io and hoyoul.com.
 #
-# Dedicated hostname, own certificate, own password file. Nothing here can
-# affect the product sites: if this vhost is broken, checkout and sign-in are
-# untouched.
+# Dedicated hostname, own certificate. Nothing here can affect the product
+# sites: if this vhost is broken, checkout and sign-in are untouched.
 #
-# The reports list visitor IPs, so access is gated by basic auth over HTTPS
-# only. Port 80 exists solely to serve ACME challenges and to redirect.
+# The reports list visitor IPs, so access is gated at the edge by Cloudflare
+# Access (app "Analytics reports", allow-list by email). There is no basic auth
+# here and no password file on the box: one place decides who gets in, and it is
+# not this vhost. That only holds because the origin answers Cloudflare alone --
+# see "Origin lock" in the README.
+#
+# The certificate is a Cloudflare **Origin CA** cert, valid 15 years, trusted by
+# the Cloudflare edge and by nothing else. That is the point: no public CA needs
+# to reach this box, so there is no ACME challenge to serve and no renewal timer
+# to fail silently. The old Let's Encrypt webroot blocks are gone with it.
 #
 # NOTE: use `root`, not `alias`. `alias` substitutes the matched location
 # prefix, so `location = /` with `alias .../index.html` produced
@@ -17,14 +24,9 @@ server {
     listen [::]:80;
     server_name analytics.limeyeti.com;
 
-    # Token validation must work without auth and without a redirect.
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/html;
-        default_type "text/plain";
-        try_files $uri =404;
-    }
-
-    # Everything else over plain HTTP goes to HTTPS. No content served here.
+    # No ACME path any more: the certificate is not issued by a public CA, so
+    # nothing ever fetches a challenge from here. Plain HTTP does one thing --
+    # send the visitor to HTTPS.
     location / {
         return 301 https://$host$request_uri;
     }
@@ -35,40 +37,19 @@ server {
     listen [::]:443 ssl;
     server_name analytics.limeyeti.com;
 
-    ssl_certificate     /etc/letsencrypt/live/analytics.limeyeti.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/analytics.limeyeti.com/privkey.pem;
+    # Cloudflare Origin CA. The full chain (leaf + intermediate) lives in one
+    # file; the key never leaves this box.
+    ssl_certificate     /etc/ssl/cloudflare/analytics.limeyeti.com.pem;
+    ssl_certificate_key /etc/ssl/cloudflare/analytics.limeyeti.com.key;
 
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
     add_header Cache-Control "private, no-store" always;
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
 
-    # Also serve the challenge on 443: Cloudflare's "Always Use HTTPS" turns the
-    # validator's http-01 request into an HTTPS one, and without this the
-    # challenge 404s and webroot validation fails. That failure is exactly what
-    # pushed the original issuance onto the standalone authenticator.
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/html;
-        default_type "text/plain";
-        try_files $uri =404;
-    }
-
     location / {
         root /var/www/traffic;
         index index.html;
-        # No auth_basic here any more: access is enforced at the edge by
-        # Cloudflare Access (app "Analytics reports", allow-list by email), which
-        # redirects unauthenticated visitors to a Cloudflare login before the
-        # request ever reaches this vhost.
-        #
-        # The password file and the old basic-auth config are gone rather than
-        # merely disabled, so there is one place that decides who gets in. A
-        # second, stale credential store on the box is a liability: it is another
-        # password to leak and another thing that looks like a control.
-        #
-        # This relies on the origin answering only Cloudflare (see the packet
-        # filter in the README). Without that, a direct hit on the droplet would
-        # bypass the edge and reach these reports with no login at all.
         autoindex off;
         try_files $uri $uri/ =404;
     }

@@ -49,8 +49,42 @@ or sync them back into git.
 sudo bash install/install.sh
 ```
 
-Idempotent; safe to re-run. It copies files, creates directories, reloads nginx
-and can issue the certificate if one is missing.
+Idempotent; safe to re-run. It copies files, creates directories and restarts
+nginx. It cannot create the certificate (see **Certificate** below); it checks
+for one and refuses to continue if it is missing or does not match the key.
+
+## Certificate
+
+The origin uses a **Cloudflare Origin CA** certificate, not Let's Encrypt.
+
+Origin CA certs are trusted by the Cloudflare edge and by nothing else, which is
+exactly the trust model here: the origin answers Cloudflare alone (see **Origin
+lock**), so no public CA ever needs to reach this box. That removes the entire
+renewal path -- no ACME challenge to serve, no certbot timer, no 90-day cliff to
+discover at the worst moment. Validity is 15 years.
+
+The private key never leaves the droplet. Generate it there, hand the CSR to
+Cloudflare, and save the returned chain:
+
+```sh
+sudo install -d -m 700 /etc/ssl/cloudflare && cd /etc/ssl/cloudflare
+sudo openssl req -new -newkey rsa:2048 -nodes \
+  -keyout analytics.limeyeti.com.key -out analytics.csr \
+  -subj '/CN=analytics.limeyeti.com'
+sudo cat analytics.csr     # paste into Cloudflare -> SSL/TLS -> Origin Server
+```
+
+Save the certificate as `/etc/ssl/cloudflare/analytics.limeyeti.com.pem`. It
+holds **both** blocks Cloudflare returns -- the leaf first, then the
+intermediate -- because that file is the full chain nginx serves.
+
+Only list hostnames **this origin** answers in the CSR. A cert for
+`analytics.limeyeti.com` is not a license to cover the apex or a wildcard; each
+origin gets its own cert with its own names.
+
+Because there is no ACME path, the vhost has no
+`.well-known/acme-challenge/` location. If a public cert is ever wanted here
+again, that location and its Access exception must come back together.
 
 ## Access
 

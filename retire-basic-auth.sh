@@ -28,8 +28,11 @@ if ! nginx -t; then
   exit 1
 fi
 
-say "4. Reload"
-systemctl reload nginx
+say "4. Restart"
+# Restart rather than reload: a removed password file is not reliably dropped by
+# a reload. On the live box the old credentials kept being demanded until nginx
+# was restarted, which looks exactly like "the removal did not work".
+systemctl restart nginx
 
 say "5. Delete the password file"
 if [[ -f $HTPASSWD ]]; then
@@ -50,7 +53,7 @@ if [[ "$CODE" == "502" || "$CODE" == "000" ]]; then
   # next section, so at this point it still exists; restoring the config is
   # enough to put the old gate back exactly as it was.
   cp "$(ls -t /root/$DOMAIN.*.bak | head -1)" "/etc/nginx/sites-available/$DOMAIN"
-  systemctl reload nginx
+  systemctl restart nginx
   echo "   restored the previous vhost; basic auth is back" >&2
   exit 1
 fi
